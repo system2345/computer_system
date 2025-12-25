@@ -2,9 +2,11 @@
 module EX(
     input wire clk,
     input wire rst,
+    // input wire flush,
     input wire [`StallBus-1:0] stall,
     
-    output wire stallreq, // 暂停请求输出
+    // --- 之前修复: 暂停请求输出端口 ---
+    output wire stallreq, 
 
     input wire [`ID_TO_EX_WD-1:0] id_to_ex_bus,
 
@@ -58,7 +60,7 @@ module EX(
         rf_rdata2       // 31:0
     } = id_to_ex_bus_r;
 
-    // --- 解码逻辑 ---
+    // --- 解码逻辑 (之前添加) ---
     wire [5:0] ex_op = inst[31:26];
     wire [5:0] ex_func = inst[5:0];
     
@@ -93,7 +95,7 @@ module EX(
         .alu_result  (alu_result  )
     );
 
-    // --- HI/LO 寄存器 ---
+    // --- HI/LO 寄存器 (之前添加) ---
     reg [31:0] hi;
     reg [31:0] lo;
 
@@ -102,16 +104,63 @@ module EX(
                        inst_mflo ? lo :
                        alu_result;
     
+    // --- 本次修改重点：SB/SH/SW 的写使能与数据对齐处理 ---
     wire inst_sb, inst_sh, inst_sw;
-    wire [3:0] data_sram_wen_r;
-    wire [31:0] data_sram_wdata_r;
+    reg [3:0] data_sram_wen_r;
+    reg [31:0] data_sram_wdata_r;
+
     assign {
         inst_sb,
         inst_sh,
         inst_sw
     } = data_ram_wen[2:0];
-    assign data_sram_wen_r = inst_sw ? 4'b1111 : 4'b0000;
-    assign data_sram_wdata_r = inst_sw ? rf_rdata2 : 32'b0;
+
+    // 获取地址低两位，用于判断写入位置
+    wire [1:0] addr_offset = alu_result[1:0];
+
+    always @(*) begin
+        data_sram_wen_r = 4'b0000;
+        data_sram_wdata_r = 32'b0;
+        
+        if (inst_sw) begin
+            // sw: 写整个字 (4字节)
+            data_sram_wen_r = 4'b1111;
+            data_sram_wdata_r = rf_rdata2;
+        end
+        else if (inst_sh) begin
+            // sh: 写半字 (2字节)
+            if (addr_offset[1] == 1'b0) begin // 地址是对齐到 0x...0
+                data_sram_wen_r = 4'b0011;
+                data_sram_wdata_r = {16'b0, rf_rdata2[15:0]};
+            end
+            else begin // 地址是对齐到 0x...2
+                data_sram_wen_r = 4'b1100;
+                data_sram_wdata_r = {rf_rdata2[15:0], 16'b0};
+            end
+        end
+        else if (inst_sb) begin
+            // sb: 写字节 (1字节)
+            case (addr_offset)
+                2'b00: begin
+                    data_sram_wen_r = 4'b0001;
+                    data_sram_wdata_r = {24'b0, rf_rdata2[7:0]};
+                end
+                2'b01: begin
+                    data_sram_wen_r = 4'b0010;
+                    data_sram_wdata_r = {16'b0, rf_rdata2[7:0], 8'b0};
+                end
+                2'b10: begin
+                    data_sram_wen_r = 4'b0100;
+                    data_sram_wdata_r = {8'b0, rf_rdata2[7:0], 16'b0};
+                end
+                2'b11: begin
+                    data_sram_wen_r = 4'b1000;
+                    data_sram_wdata_r = {rf_rdata2[7:0], 24'b0};
+                end
+            endcase
+        end
+    end
+    // ----------------------------------------------------
 
     assign data_sram_en = data_ram_en;
     assign data_sram_wen = data_sram_wen_r;
@@ -151,6 +200,7 @@ module EX(
     wire div_ready_i;
     reg stallreq_for_div;
     
+    // 之前修复: 连接暂停信号
     assign stallreq = stallreq_for_div;
 
     reg [31:0] div_opdata1_o;
@@ -237,19 +287,16 @@ module EX(
         end
     end
 
-    // --- 关键修改：HI/LO 寄存器写入逻辑 ---
-    // 将除法写入逻辑提出来，使其不受 stall 信号的阻塞
+    // --- HI/LO 寄存器写入逻辑 (之前修复) ---
     always @(posedge clk) begin
         if (rst) begin
             hi <= 32'b0;
             lo <= 32'b0;
         end
-        // 优先级1：除法完成写入 (无论是否 Stall，只要 Ready 就写)
         else if (div_ready_i == `DivResultReady) begin
             hi <= div_result[63:32];
             lo <= div_result[31:0];
         end
-        // 优先级2：常规写入 (仅在流水线流动时)
         else if (stall[2] == `NoStop) begin 
             if (inst_mthi) begin
                 hi <= rf_rdata1;
@@ -263,6 +310,5 @@ module EX(
             end
         end
     end
-    // -------------------------------------
 
 endmodule
