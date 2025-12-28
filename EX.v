@@ -9,6 +9,8 @@ module EX(
 
     output wire [`EX_TO_MEM_WD-1:0] ex_to_mem_bus,
 
+    output wire stallreq,
+
     output wire data_sram_en,
     output wire [3:0] data_sram_wen,
     output wire [31:0] data_sram_addr,
@@ -21,9 +23,6 @@ module EX(
         if (rst) begin
             id_to_ex_bus_r <= `ID_TO_EX_WD'b0;
         end
-        // else if (flush) begin
-        //     id_to_ex_bus_r <= `ID_TO_EX_WD'b0;
-        // end
         else if (stall[2]==`Stop && stall[3]==`NoStop) begin
             id_to_ex_bus_r <= `ID_TO_EX_WD'b0;
         end
@@ -33,6 +32,7 @@ module EX(
     end
 
     wire [31:0] ex_pc, inst;
+    wire inst_is_link;
     wire [4:0] mem_op;
     wire [11:0] alu_op;
     wire [2:0] sel_alu_src1;
@@ -46,6 +46,7 @@ module EX(
     reg is_in_delayslot;
 
     assign {
+        inst_is_link,
         mem_op,
         ex_pc,          // 148:117
         inst,           // 116:85
@@ -116,6 +117,7 @@ module EX(
                               inst_sh ? {2{rf_rdata2[15:0]}} : rf_rdata2;
 
     assign ex_to_mem_bus = {
+        inst_is_link,
         mem_op,
         ex_pc,          // 75:44
         data_ram_en,    // 43
@@ -134,8 +136,8 @@ module EX(
     	.clk        (clk            ),
         .resetn     (~rst           ),
         .mul_signed (mul_signed     ),
-        .ina        (      ), // 乘法源操作数1
-        .inb        (      ), // 乘法源操作数2
+        .ina        (rf_rdata1      ), // 乘法源操作数1
+        .inb        (rf_rdata2      ), // 乘法源操作数2
         .result     (mul_result     ) // 乘法结果 64bit
     );
 
@@ -231,5 +233,6 @@ module EX(
 
     // mul_result 和 div_result 可以直接使用
     
+    assign stallreq = stallreq_for_div;
     
 endmodule

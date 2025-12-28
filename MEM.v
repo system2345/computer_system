@@ -34,6 +34,7 @@ module MEM(
 
     wire [31:0] mem_pc;
     wire [4:0] mem_op;
+    wire mem_is_link;
     wire data_ram_en;
     wire [3:0] data_ram_wen;
     wire sel_rf_res;
@@ -44,6 +45,7 @@ module MEM(
     wire [31:0] mem_result;
 
     assign {
+        mem_is_link,
         mem_op,
         mem_pc,         // 75:44
         data_ram_en,    // 43
@@ -73,13 +75,13 @@ module MEM(
         .out (byte_sel      )
     );
 
-    assign b_data = byte_sel[3] ? data_sram_rdata[31:24] : 
-                    byte_sel[2] ? data_sram_rdata[23:16] :
-                    byte_sel[1] ? data_sram_rdata[15: 8] : 
-                    byte_sel[0] ? data_sram_rdata[ 7: 0] : 8'b0;
-    assign h_data = byte_sel[2] ? data_sram_rdata[31:16] :
-                    byte_sel[0] ? data_sram_rdata[15: 0] : 16'b0;
-    assign w_data = data_sram_rdata;
+    assign b_data = byte_sel[3] ? data_sram_rdata_r[31:24] : 
+                    byte_sel[2] ? data_sram_rdata_r[23:16] :
+                    byte_sel[1] ? data_sram_rdata_r[15: 8] : 
+                    byte_sel[0] ? data_sram_rdata_r[ 7: 0] : 8'b0;
+    assign h_data = byte_sel[2] ? data_sram_rdata_r[31:16] :
+                    byte_sel[0] ? data_sram_rdata_r[15: 0] : 16'b0;
+    assign w_data = data_sram_rdata_r;
 
     assign mem_result = inst_lb     ? {{24{b_data[7]}},b_data} :
                         inst_lbu    ? {{24{1'b0}},b_data} :

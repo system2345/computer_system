@@ -26,13 +26,13 @@ module mycpu_core(
     wire [`EX_TO_MEM_WD-1:0] ex_to_mem_bus;
     wire [`MEM_TO_WB_WD-1:0] mem_to_wb_bus;
     wire [`BR_WD-1:0] br_bus; 
-    wire [`DATA_SRAM_WD-1:0] ex_dt_sram_bus;
+    //wire [`DATA_SRAM_WD-1:0] ex_dt_sram_bus;
     wire [`WB_TO_RF_WD-1:0] wb_to_rf_bus;
     wire [`StallBus-1:0] stall;
     wire stallreq_for_load;
     wire stallreq_from_ex;
     wire stallreq;
-    assign stallreq_from_ex = 1'b0;
+    //assign stallreq_from_ex = 1'b0;
 
     IF u_IF(
     	.clk             (clk             ),
@@ -66,6 +66,7 @@ module mycpu_core(
     	.clk             (clk             ),
         .rst             (rst             ),
         .stall           (stall           ),
+        .stallreq        (stallreq_from_ex), 
         .id_to_ex_bus    (id_to_ex_bus    ),
         .ex_to_mem_bus   (ex_to_mem_bus   ),
         .data_sram_en    (data_sram_en    ),
