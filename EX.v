@@ -48,8 +48,8 @@ module EX(
     assign {
         inst_is_link,
         mem_op,
-        ex_pc,          // 148:117
-        inst,           // 116:85
+        ex_pc,          // 158:127
+        inst,           // 126:95
         alu_op,         // 94:83
         sel_alu_src1,   // 82:80
         sel_alu_src2,   // 79:76
@@ -73,9 +73,10 @@ module EX(
     assign alu_src1 = sel_alu_src1[1] ? ex_pc :
                       sel_alu_src1[2] ? sa_zero_extend : rf_rdata1;
 
-    assign alu_src2 = sel_alu_src2[1] ? imm_sign_extend :
+    assign alu_src2 = sel_alu_src2[3] ? imm_zero_extend :
                       sel_alu_src2[2] ? 32'd8 :
-                      sel_alu_src2[3] ? imm_zero_extend : rf_rdata2;
+                      sel_alu_src2[1] ? imm_sign_extend :
+                      sel_alu_src2[0] ? rf_rdata2 : rf_rdata2;
     
     alu u_alu(
     	.alu_control (alu_op ),
