@@ -4,19 +4,19 @@ module EX(
     input wire rst,
     // input wire flush,
     input wire [`StallBus-1:0] stall,
+    
+    // --- ֮ǰ�޸�: ��ͣ��������˿� ---
+    output wire stallreq, 
 
     input wire [`ID_TO_EX_WD-1:0] id_to_ex_bus,
 
     output wire [`EX_TO_MEM_WD-1:0] ex_to_mem_bus,
-
-    output wire stallreq,
 
     output wire data_sram_en,
     output wire [3:0] data_sram_wen,
     output wire [31:0] data_sram_addr,
     output wire [31:0] data_sram_wdata
 );
-
     reg [`ID_TO_EX_WD-1:0] id_to_ex_bus_r;
 
     always @ (posedge clk) begin
@@ -32,7 +32,6 @@ module EX(
     end
 
     wire [31:0] ex_pc, inst;
-    wire inst_is_link;
     wire [4:0] mem_op;
     wire [11:0] alu_op;
     wire [2:0] sel_alu_src1;
@@ -46,11 +45,10 @@ module EX(
     reg is_in_delayslot;
 
     assign {
-        inst_is_link,
         mem_op,
-        ex_pc,          // 158:127
-        inst,           // 126:95
-        alu_op,         // 94:83
+        ex_pc,          // 148:117
+        inst,           // 116:85
+        alu_op,         // 84:83
         sel_alu_src1,   // 82:80
         sel_alu_src2,   // 79:76
         data_ram_en,    // 75
@@ -58,9 +56,22 @@ module EX(
         rf_we,          // 70
         rf_waddr,       // 69:65
         sel_rf_res,     // 64
-        rf_rdata1,         // 63:32
-        rf_rdata2          // 31:0
+        rf_rdata1,      // 63:32
+        rf_rdata2       // 31:0
     } = id_to_ex_bus_r;
+
+    // --- �����߼� (֮ǰ����) ---
+    wire [5:0] ex_op = inst[31:26];
+    wire [5:0] ex_func = inst[5:0];
+    
+    wire inst_mult  = (ex_op == 6'b000000) & (ex_func == 6'b011000);
+    wire inst_multu = (ex_op == 6'b000000) & (ex_func == 6'b011001);
+    wire inst_div_decode   = (ex_op == 6'b000000) & (ex_func == 6'b011010);
+    wire inst_divu_decode  = (ex_op == 6'b000000) & (ex_func == 6'b011011);
+    wire inst_mfhi  = (ex_op == 6'b000000) & (ex_func == 6'b010000);
+    wire inst_mflo  = (ex_op == 6'b000000) & (ex_func == 6'b010010);
+    wire inst_mthi  = (ex_op == 6'b000000) & (ex_func == 6'b010001);
+    wire inst_mtlo  = (ex_op == 6'b000000) & (ex_func == 6'b010011);
 
     wire [31:0] imm_sign_extend, imm_zero_extend, sa_zero_extend;
     assign imm_sign_extend = {{16{inst[15]}},inst[15:0]};
@@ -73,10 +84,9 @@ module EX(
     assign alu_src1 = sel_alu_src1[1] ? ex_pc :
                       sel_alu_src1[2] ? sa_zero_extend : rf_rdata1;
 
-    assign alu_src2 = sel_alu_src2[3] ? imm_zero_extend :
+    assign alu_src2 = sel_alu_src2[1] ? imm_sign_extend :
                       sel_alu_src2[2] ? 32'd8 :
-                      sel_alu_src2[1] ? imm_sign_extend :
-                      sel_alu_src2[0] ? rf_rdata2 : rf_rdata2;
+                      sel_alu_src2[3] ? imm_zero_extend : rf_rdata2;
     
     alu u_alu(
     	.alu_control (alu_op ),
@@ -85,40 +95,78 @@ module EX(
         .alu_result  (alu_result  )
     );
 
-    assign ex_result = alu_result;
+    // --- HI/LO �Ĵ��� (֮ǰ����) ---
+    reg [31:0] hi;
+    reg [31:0] lo;
 
-    wire inst_sb, inst_sh, inst_sw, inst_lb, inst_lbu, inst_lh, inst_lhu, inst_lw;
-    wire [3:0] byte_sel;
-    wire [3:0] data_ram_sel;
+    // --- ���ѡ���߼� ---
+    assign ex_result = inst_mfhi ? hi : 
+                       inst_mflo ? lo : 
+                       alu_result;
     
+    // --- �����޸��ص㣺SB/SH/SW ��дʹ�������ݶ��봦�� ---
+    wire inst_sb, inst_sh, inst_sw;
+    reg [3:0] data_sram_wen_r;
+    reg [31:0] data_sram_wdata_r;
+
     assign {
-        inst_lb,
-        inst_lbu,
-        inst_lh,
-        inst_lhu,
-        inst_lw
-    } = mem_op;
-    assign inst_sb = data_ram_wen[2];
-    assign inst_sh = data_ram_wen[1];
-    assign inst_sw = data_ram_wen[0];
+        inst_sb,
+        inst_sh,
+        inst_sw
+    } = data_ram_wen[2:0];
 
-    decoder_2_4 u_decoder_2_4(
-        .in  (ex_result[1:0]),
-        .out (byte_sel      )
-    );
+    // ��ȡ��ַ����λ�������ж�д��λ��
+    wire [1:0] addr_offset = alu_result[1:0];
 
-    assign data_ram_sel = inst_sb | inst_lb | inst_lbu ? byte_sel :
-                          inst_sh | inst_lh | inst_lhu ? {{2{byte_sel[2]}},{2{byte_sel[0]}}} :
-                          inst_sw | inst_lw ? 4'b1111 : 4'b0000;
+    always @(*) begin
+        data_sram_wen_r = 4'b0000;
+        data_sram_wdata_r = 32'b0;
+        
+        if (inst_sw) begin
+            // sw: д������ (4�ֽ�)
+            data_sram_wen_r = 4'b1111;
+            data_sram_wdata_r = rf_rdata2;
+        end
+        else if (inst_sh) begin
+            // sh: д���� (2�ֽ�)
+            if (addr_offset[1] == 1'b0) begin // ��ַ�Ƕ��뵽 0x...0
+                data_sram_wen_r = 4'b0011;
+                data_sram_wdata_r = {16'b0, rf_rdata2[15:0]};
+            end
+            else begin // ��ַ�Ƕ��뵽 0x...2
+                data_sram_wen_r = 4'b1100;
+                data_sram_wdata_r = {rf_rdata2[15:0], 16'b0};
+            end
+        end
+        else if (inst_sb) begin
+            // sb: д�ֽ� (1�ֽ�)
+            case (addr_offset)
+                2'b00: begin
+                    data_sram_wen_r = 4'b0001;
+                    data_sram_wdata_r = {24'b0, rf_rdata2[7:0]};
+                end
+                2'b01: begin
+                    data_sram_wen_r = 4'b0010;
+                    data_sram_wdata_r = {16'b0, rf_rdata2[7:0], 8'b0};
+                end
+                2'b10: begin
+                    data_sram_wen_r = 4'b0100;
+                    data_sram_wdata_r = {8'b0, rf_rdata2[7:0], 16'b0};
+                end
+                2'b11: begin
+                    data_sram_wen_r = 4'b1000;
+                    data_sram_wdata_r = {rf_rdata2[7:0], 24'b0};
+                end
+            endcase
+        end
+    end
+    // ----------------------------------------------------
 
-    assign data_sram_en     = data_ram_en;
-    assign data_sram_wen    = {4{data_ram_wen[0] | data_ram_wen[1] | data_ram_wen[2]}} & data_ram_sel;
-    assign data_sram_addr   = ex_result; 
-    assign data_sram_wdata  = inst_sb ? {4{rf_rdata2[7:0]}}  :
-                              inst_sh ? {2{rf_rdata2[15:0]}} : rf_rdata2;
-
+    assign data_sram_en = data_ram_en;
+    assign data_sram_wen = data_sram_wen_r;
+    assign data_sram_addr = alu_result; 
+    assign data_sram_wdata = data_sram_wdata_r;
     assign ex_to_mem_bus = {
-        inst_is_link,
         mem_op,
         ex_pc,          // 75:44
         data_ram_en,    // 43
@@ -131,22 +179,29 @@ module EX(
 
     // MUL part
     wire [63:0] mul_result;
-    wire mul_signed; // 有符号乘法标记
+    wire mul_signed;
+    assign mul_signed = inst_mult; 
 
     mul u_mul(
     	.clk        (clk            ),
         .resetn     (~rst           ),
         .mul_signed (mul_signed     ),
-        .ina        (rf_rdata1      ), // 乘法源操作数1
-        .inb        (rf_rdata2      ), // 乘法源操作数2
-        .result     (mul_result     ) // 乘法结果 64bit
+        .ina        (rf_rdata1      ), 
+        .inb        (rf_rdata2      ), 
+        .result     (mul_result     ) 
     );
 
     // DIV part
     wire [63:0] div_result;
     wire inst_div, inst_divu;
+    assign inst_div = inst_div_decode;
+    assign inst_divu = inst_divu_decode;
+    
     wire div_ready_i;
     reg stallreq_for_div;
+    
+    // ֮ǰ�޸�: ������ͣ�ź�
+    assign stallreq = stallreq_for_div;
 
     reg [31:0] div_opdata1_o;
     reg [31:0] div_opdata2_o;
@@ -161,7 +216,7 @@ module EX(
         .opdata2_i    (div_opdata2_o    ),
         .start_i      (div_start_o      ),
         .annul_i      (1'b0      ),
-        .result_o     (div_result     ), // 除法结果 64bit
+        .result_o     (div_result     ), 
         .ready_o      (div_ready_i      )
     );
 
@@ -180,7 +235,7 @@ module EX(
             div_start_o = `DivStop;
             signed_div_o = 1'b0;
             case ({inst_div,inst_divu})
-                2'b10:begin
+                2'b10:begin // div
                     if (div_ready_i == `DivResultNotReady) begin
                         div_opdata1_o = rf_rdata1;
                         div_opdata2_o = rf_rdata2;
@@ -203,7 +258,7 @@ module EX(
                         stallreq_for_div = `NoStop;
                     end
                 end
-                2'b01:begin
+                2'b01:begin // divu
                     if (div_ready_i == `DivResultNotReady) begin
                         div_opdata1_o = rf_rdata1;
                         div_opdata2_o = rf_rdata2;
@@ -232,8 +287,28 @@ module EX(
         end
     end
 
-    // mul_result 和 div_result 可以直接使用
-    
-    assign stallreq = stallreq_for_div;
-    
+    // --- HI/LO �Ĵ���д���߼� (֮ǰ�޸�) ---
+    always @(posedge clk) begin
+        if (rst) begin
+            hi <= 32'b0;
+            lo <= 32'b0;
+        end
+        else if (div_ready_i == `DivResultReady) begin
+            hi <= div_result[63:32];
+            lo <= div_result[31:0];
+        end
+        else if (stall[2] == `NoStop) begin 
+            if (inst_mthi) begin
+                hi <= rf_rdata1;
+            end
+            else if (inst_mtlo) begin
+                lo <= rf_rdata1;
+            end
+            else if (inst_mult || inst_multu) begin
+                hi <= mul_result[63:32];
+                lo <= mul_result[31:0];
+            end
+        end
+    end
+
 endmodule
